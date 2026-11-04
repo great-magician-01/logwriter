@@ -3,6 +3,7 @@
 **中文 | [English](README.en.md)**
 
 [![CI](https://github.com/great-magician-01/logwriter/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/great-magician-01/logwriter/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/great-magician-01/logwriter.svg)](https://pkg.go.dev/github.com/great-magician-01/logwriter)
 
 一个只依赖 Go 标准库的异步日志库，支持自定义 Formatter、控制台与文件输出，以及按天、按大小切割日志文件。
 

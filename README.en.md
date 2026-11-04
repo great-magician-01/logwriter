@@ -3,6 +3,7 @@
 **[中文](README.md) | English**
 
 [![CI](https://github.com/great-magician-01/logwriter/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/great-magician-01/logwriter/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/great-magician-01/logwriter.svg)](https://pkg.go.dev/github.com/great-magician-01/logwriter)
 
 An asynchronous Go logging library using only the standard library. It supports custom formatters, console and file outputs, and log rotation by day and file size.
 
