@@ -23,6 +23,8 @@ An asynchronous Go logging library using only the standard library. It supports 
 
 ## Installation
 
+Requires Go 1.21 or later.
+
 ```bash
 go get github.com/great-magician-01/logwriter@latest
 ```
@@ -207,6 +209,8 @@ Rotation behavior:
 - After shutdown starts, new logging calls return `logwriter.ErrClosed`.
 
 `OnError` runs synchronously in the background consumer. It should return quickly and must not call logging methods or `Close()` on the same Logger. Logging from the callback can block when the queue is full, and calling `Close()` from the consumer waits on itself.
+
+The background consumer recovers panics raised while processing an entry (for example from the `Formatter` or `ConsoleWriter`), converts them into errors reported through `OnError` and `Close()`, and keeps running; a panicking `OnError` is contained as well and joined into the error returned by `Close()`.
 
 ## Configuration
 

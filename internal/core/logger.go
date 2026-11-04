@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -220,9 +221,21 @@ func (l *Logger) run() {
 	}()
 
 	for entry := range l.queue {
-		if err := l.write(entry); err != nil {
-			l.reportError(err)
+		l.consume(entry)
+	}
+}
+
+// consume writes one entry, converting a panic in the Formatter, the console
+// writer, or OnError into a reported error so the consumer survives it.
+func (l *Logger) consume(entry record.Entry) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			l.reportError(fmt.Errorf("logwriter: panic while processing entry %q: %v\n%s",
+				entry.Message, recovered, debug.Stack()))
 		}
+	}()
+	if err := l.write(entry); err != nil {
+		l.reportError(err)
 	}
 }
 
@@ -260,11 +273,21 @@ func writeAll(destination io.Writer, data []byte) error {
 	return nil
 }
 
+// reportError records the first background error and forwards err to OnError.
+// A panicking OnError cannot crash the consumer; its panic is joined into the
+// error Close returns.
 func (l *Logger) reportError(err error) {
 	if l.closeErr == nil {
 		l.closeErr = err
 	}
-	if l.onError != nil {
-		l.onError(err)
+	if l.onError == nil {
+		return
 	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			l.closeErr = errors.Join(l.closeErr,
+				fmt.Errorf("logwriter: OnError panicked: %v", recovered))
+		}
+	}()
+	l.onError(err)
 }

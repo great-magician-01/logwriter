@@ -23,6 +23,8 @@
 
 ## 安装
 
+要求 Go 1.21 及以上。
+
 ```bash
 go get github.com/great-magician-01/logwriter@latest
 ```
@@ -207,6 +209,8 @@ logs/20261105/20261105_1.log
 - 开始关闭后，新日志调用返回 `logwriter.ErrClosed`。
 
 `OnError` 在后台消费者中同步调用。回调应快速返回，且不要调用该 Logger 的日志方法或 `Close()`，否则队列已满时可能阻塞，直接调用 `Close()` 还会形成自等待。
+
+后台消费者会恢复处理日志过程中的 panic（如 `Formatter` 或 `ConsoleWriter` 抛出的），将其转换为错误并通过 `OnError` 和 `Close()` 返回，不会导致进程崩溃；`OnError` 自身 panic 时同样被遏制，并并入 `Close()` 的返回值。
 
 ## 配置项
 

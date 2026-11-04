@@ -234,6 +234,105 @@ func TestFormatterErrorIsReportedAndConsumerContinues(t *testing.T) {
 	}
 }
 
+func TestFormatterPanicIsReportedAndConsumerContinues(t *testing.T) {
+	var output bytes.Buffer
+	var reported []error
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &output,
+		Formatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			if entry.Message == "boom" {
+				panic("formatter exploded")
+			}
+			return []byte(entry.Message + "\n"), nil
+		}),
+		OnError: func(err error) { reported = append(reported, err) },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("boom")
+	_ = logger.Info("good")
+	closeErr := logger.Close()
+	if closeErr == nil || !strings.Contains(closeErr.Error(), "formatter exploded") {
+		t.Fatalf("Close() error = %v, want it to contain the panic value", closeErr)
+	}
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), "formatter exploded") {
+		t.Fatalf("OnError received %v, want one panic error", reported)
+	}
+	if !strings.Contains(reported[0].Error(), "logger_test.go") {
+		t.Fatalf("panic error = %v, want a stack trace pointing at the panic site", reported[0])
+	}
+	if want := "good\n"; output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestPanickingOnErrorDoesNotCrashConsumer(t *testing.T) {
+	formatErr := errors.New("format failed")
+	var output bytes.Buffer
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &output,
+		Formatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			if entry.Message == "bad" {
+				return nil, formatErr
+			}
+			return []byte(entry.Message + "\n"), nil
+		}),
+		OnError: func(err error) { panic("OnError exploded") },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("bad")
+	_ = logger.Info("good")
+	closeErr := logger.Close()
+	if !errors.Is(closeErr, formatErr) {
+		t.Fatalf("Close() error = %v, want format error", closeErr)
+	}
+	if !strings.Contains(closeErr.Error(), "OnError exploded") {
+		t.Fatalf("Close() error = %v, want it to contain the OnError panic", closeErr)
+	}
+	if want := "good\n"; output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
+// TestFormatterNilPanicIsReported pins the Go 1.21+ semantics where a literal
+// panic(nil) reaches recover as *runtime.PanicNilError; lowering the go
+// directive in go.mod would make this test fail.
+func TestFormatterNilPanicIsReported(t *testing.T) {
+	var output bytes.Buffer
+	var reported []error
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &output,
+		Formatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			if entry.Message == "nil panic" {
+				panic(nil)
+			}
+			return []byte(entry.Message + "\n"), nil
+		}),
+		OnError: func(err error) { reported = append(reported, err) },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("nil panic")
+	_ = logger.Info("good")
+	closeErr := logger.Close()
+	if len(reported) != 1 || !strings.Contains(reported[0].Error(), "panic called with nil argument") {
+		t.Fatalf("OnError received %v, want the runtime nil-panic error", reported)
+	}
+	if closeErr == nil || !strings.Contains(closeErr.Error(), "panic called with nil argument") {
+		t.Fatalf("Close() error = %v, want it to contain the nil-panic error", closeErr)
+	}
+	if want := "good\n"; output.String() != want {
+		t.Fatalf("output = %q, want %q", output.String(), want)
+	}
+}
+
 func TestConsoleFailureDoesNotSkipFile(t *testing.T) {
 	writeErr := errors.New("console failed")
 	directory := t.TempDir()
