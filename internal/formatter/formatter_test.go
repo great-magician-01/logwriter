@@ -29,6 +29,30 @@ func TestTextFormatter(t *testing.T) {
 	}
 }
 
+func TestTextFormatterCallerBaseName(t *testing.T) {
+	tests := map[string]string{
+		`D:\project\main.go`:  "main.go", // Windows-style path
+		"/home/user/main.go":  "main.go", // Unix-style path
+		"main.go":             "main.go",
+		`D:\project\sub\app`:  "app",
+		"/var/log/server.log": "server.log",
+	}
+	for file, want := range tests {
+		entry := record.Entry{
+			Level:   record.InfoLevel,
+			Message: "msg",
+			Caller:  record.Caller{File: file, Line: 42},
+		}
+		data, err := (TextFormatter{}).Format(entry)
+		if err != nil {
+			t.Fatalf("Format(%q) error = %v", file, err)
+		}
+		if want := "0001-01-01 00:00:00.000 [INFO] [" + want + ":42] msg\n"; string(data) != want {
+			t.Fatalf("Format(%q) = %q, want %q", file, data, want)
+		}
+	}
+}
+
 func TestTextFormatterCustomTimeLayout(t *testing.T) {
 	entry := record.Entry{
 		Time:    time.Date(2026, 11, 4, 15, 30, 20, 0, time.UTC),

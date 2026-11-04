@@ -2,7 +2,6 @@ package formatter
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/great-magician-01/logwriter/internal/record"
@@ -44,7 +43,7 @@ func (f TextFormatter) Format(entry record.Entry) ([]byte, error) {
 	b.WriteString(entry.Level.String())
 	b.WriteByte(']')
 	if entry.Caller.File != "" {
-		fmt.Fprintf(&b, " [%s:%d]", filepath.Base(entry.Caller.File), entry.Caller.Line)
+		fmt.Fprintf(&b, " [%s:%d]", baseName(entry.Caller.File), entry.Caller.Line)
 	}
 	b.WriteByte(' ')
 	b.WriteString(entry.Message)
@@ -56,4 +55,15 @@ func (f TextFormatter) Format(entry record.Entry) ([]byte, error) {
 	}
 	b.WriteByte('\n')
 	return []byte(b.String()), nil
+}
+
+// baseName returns everything after the last path separator, treating both
+// '/' and '\' as separators. runtime.Caller yields native paths ('\' on
+// Windows, '/' elsewhere), and filepath.Base only handles the platform's own
+// separator, so paths from another platform would otherwise be kept whole.
+func baseName(file string) string {
+	if i := strings.LastIndexAny(file, `/\`); i >= 0 {
+		return file[i+1:]
+	}
+	return file
 }
