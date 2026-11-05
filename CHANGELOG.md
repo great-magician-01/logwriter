@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/great-magician-01/logwriter/compare/v1.1.0...v1.2.0) (2026-11-05)
+
+
+### Features
+
+* support colored console with plain file output ([393c354](https://github.com/great-magician-01/logwriter/commit/393c354ddb28e035e2b33407eab02b11fb4ea8a8))
+* support colored console with plain file output ([e0b59b9](https://github.com/great-magician-01/logwriter/commit/e0b59b984736c7a871429f6b0d122ae7c77274c6))
+
 ## [1.1.0](https://github.com/great-magician-01/logwriter/compare/v1.0.0...v1.1.0) (2026-11-04)
 
 
