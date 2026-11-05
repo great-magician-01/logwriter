@@ -24,7 +24,7 @@ type (
 	Formatter = formatter.Formatter
 	// FormatterFunc adapts a function to Formatter.
 	FormatterFunc = formatter.FormatterFunc
-	// TextFormatter is the built-in plain-text formatter.
+	// TextFormatter is the built-in text formatter with optional level colors.
 	TextFormatter = formatter.TextFormatter
 )
 

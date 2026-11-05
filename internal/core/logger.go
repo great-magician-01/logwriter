@@ -21,19 +21,23 @@ const DefaultQueueSize = 1024
 var ErrClosed = errors.New("logwriter: logger is closed")
 
 // Config controls logging, outputs, queuing, and file rotation.
+// ConsoleFormatter and FileFormatter optionally override Formatter for their
+// respective outputs. A nil output-specific formatter falls back to Formatter.
 type Config struct {
-	Level         record.Level
-	Formatter     formatter.Formatter
-	Console       bool
-	ConsoleWriter io.Writer
-	File          bool
-	Directory     string
-	FilePrefix    string
-	RotateByDay   bool
-	MaxSize       int64
-	QueueSize     int
-	Caller        bool
-	OnError       func(error)
+	Level            record.Level
+	Formatter        formatter.Formatter
+	ConsoleFormatter formatter.Formatter
+	FileFormatter    formatter.Formatter
+	Console          bool
+	ConsoleWriter    io.Writer
+	File             bool
+	Directory        string
+	FilePrefix       string
+	RotateByDay      bool
+	MaxSize          int64
+	QueueSize        int
+	Caller           bool
+	OnError          func(error)
 }
 
 // Logger accepts entries concurrently and writes them from one consumer.
@@ -42,13 +46,15 @@ type Logger struct {
 	done  chan struct{}
 	state atomic.Uint64
 
-	minLevel  record.Level
-	formatter formatter.Formatter
-	console   io.Writer
-	file      *logfile.File
-	caller    bool
-	onError   func(error)
-	now       func() time.Time
+	minLevel         record.Level
+	formatter        formatter.Formatter
+	consoleFormatter formatter.Formatter
+	fileFormatter    formatter.Formatter
+	console          io.Writer
+	file             *logfile.File
+	caller           bool
+	onError          func(error)
+	now              func() time.Time
 
 	closeErr error
 }
@@ -97,15 +103,17 @@ func New(config Config) (*Logger, error) {
 	}
 
 	logger := &Logger{
-		queue:     make(chan record.Entry, config.QueueSize),
-		done:      make(chan struct{}),
-		minLevel:  config.Level,
-		formatter: config.Formatter,
-		console:   console,
-		file:      file,
-		caller:    config.Caller,
-		onError:   config.OnError,
-		now:       time.Now,
+		queue:            make(chan record.Entry, config.QueueSize),
+		done:             make(chan struct{}),
+		minLevel:         config.Level,
+		formatter:        config.Formatter,
+		consoleFormatter: config.ConsoleFormatter,
+		fileFormatter:    config.FileFormatter,
+		console:          console,
+		file:             file,
+		caller:           config.Caller,
+		onError:          config.OnError,
+		now:              time.Now,
 	}
 	go logger.run()
 	return logger, nil
@@ -240,14 +248,52 @@ func (l *Logger) consume(entry record.Entry) {
 }
 
 func (l *Logger) write(entry record.Entry) error {
-	data, err := l.formatter.Format(entry)
-	if err != nil {
-		return fmt.Errorf("format log entry: %w", err)
-	}
-	if len(data) == 0 {
-		return nil
+	if l.consoleFormatter == nil && l.fileFormatter == nil {
+		data, err := l.formatter.Format(entry)
+		if err != nil {
+			return fmt.Errorf("format log entry: %w", err)
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		return l.writeShared(entry, data)
 	}
 
+	var errs []error
+	if l.console != nil {
+		outputFormatter := l.consoleFormatter
+		if outputFormatter == nil {
+			outputFormatter = l.formatter
+		}
+		data, err := outputFormatter.Format(entry)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("format console log entry: %w", err))
+		case len(data) > 0:
+			if err := writeAll(l.console, data); err != nil {
+				errs = append(errs, fmt.Errorf("write console: %w", err))
+			}
+		}
+	}
+	if l.file != nil {
+		outputFormatter := l.fileFormatter
+		if outputFormatter == nil {
+			outputFormatter = l.formatter
+		}
+		data, err := outputFormatter.Format(entry)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("format file log entry: %w", err))
+		case len(data) > 0:
+			if err := l.file.Write(entry.Time, data); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (l *Logger) writeShared(entry record.Entry, data []byte) error {
 	var errs []error
 	if l.console != nil {
 		if err := writeAll(l.console, data); err != nil {
