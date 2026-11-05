@@ -24,9 +24,11 @@ func (f FormatterFunc) Format(entry record.Entry) ([]byte, error) {
 }
 
 // TextFormatter writes entries as text. TimeFormat uses Go's time layout and
-// defaults to DefaultTimeFormat.
+// defaults to DefaultTimeFormat. Color wraps the level name in ANSI color
+// escape sequences; it is intended for console output.
 type TextFormatter struct {
 	TimeFormat string
+	Color      bool
 }
 
 // Format formats an entry as timestamp, level, optional caller, message, and
@@ -40,7 +42,17 @@ func (f TextFormatter) Format(entry record.Entry) ([]byte, error) {
 	var b strings.Builder
 	b.WriteString(entry.Time.Format(layout))
 	b.WriteString(" [")
+	color := ""
+	if f.Color {
+		color = levelColor(entry.Level)
+	}
+	if color != "" {
+		b.WriteString(color)
+	}
 	b.WriteString(entry.Level.String())
+	if color != "" {
+		b.WriteString("\x1b[0m")
+	}
 	b.WriteByte(']')
 	if entry.Caller.File != "" {
 		fmt.Fprintf(&b, " [%s:%d]", baseName(entry.Caller.File), entry.Caller.Line)
@@ -55,6 +67,21 @@ func (f TextFormatter) Format(entry record.Entry) ([]byte, error) {
 	}
 	b.WriteByte('\n')
 	return []byte(b.String()), nil
+}
+
+func levelColor(level record.Level) string {
+	switch level {
+	case record.DebugLevel:
+		return "\x1b[36m" // Cyan.
+	case record.InfoLevel:
+		return "\x1b[32m" // Green.
+	case record.WarnLevel:
+		return "\x1b[33m" // Yellow.
+	case record.ErrorLevel:
+		return "\x1b[31m" // Red.
+	default:
+		return ""
+	}
 }
 
 // baseName returns everything after the last path separator, treating both

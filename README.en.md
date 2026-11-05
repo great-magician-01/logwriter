@@ -9,8 +9,8 @@ An asynchronous Go logging library using only the standard library. It supports 
 
 ## Features
 
-- Custom `Formatter` support with a built-in plain-text formatter.
-- Console output, file output, or both.
+- Custom `Formatter` support with a built-in plain-text formatter and optional ANSI level colors.
+- Console output, file output, or both, with independent formatters for each output.
 - Rotation by day, size, or both.
 - A bounded queue and one background goroutine that serializes formatting, output, and rotation.
 - No mutex around file writes; only the queue consumer accesses file handles, sizes, and indexes.
@@ -50,13 +50,14 @@ import (
 
 func main() {
     logger, err := logwriter.New(logwriter.Config{
-        Level:       logwriter.InfoLevel,
-        Console:     true,
-        File:        true,
-        Directory:   "logs",
-        RotateByDay: true,
-        MaxSize:     200 * 1024 * 1024,
-        QueueSize:   1024,
+        Level:            logwriter.InfoLevel,
+        Console:          true,
+        ConsoleFormatter: logwriter.TextFormatter{Color: true},
+        File:             true,
+        Directory:        "logs",
+        RotateByDay:      true,
+        MaxSize:          200 * 1024 * 1024,
+        QueueSize:        1024,
         OnError: func(err error) {
             log.Printf("logger error: %v", err)
         },
@@ -79,7 +80,7 @@ func main() {
 }
 ```
 
-Default text output:
+Default plain-text file output (only the console level name has ANSI color; the file contains no color escapes):
 
 ```text
 2026-11-04 15:30:20.123 [INFO] user logged in user_id=10086
@@ -91,7 +92,7 @@ A `nil` return from `Info()` means the entry was accepted into the queue, not th
 
 The repository contains complete runnable examples:
 
-- [examples/basic/main.go](examples/basic/main.go): console and file output with day-and-size rotation.
+- [examples/basic/main.go](examples/basic/main.go): colored console output, plain file output, and day-and-size rotation.
 - [examples/custom_formatter/main.go](examples/custom_formatter/main.go): a custom JSON formatter, structured fields, and caller information.
 
 Run them from the repository root:
@@ -135,6 +136,25 @@ logger, err := logwriter.New(logwriter.Config{
 ```
 
 Formatters are called serially by the background consumer and do not need to be concurrency-safe. A formatter must add its own `\n` when a newline is desired. File rotation uses the actual formatted byte length.
+
+### Colored console, plain file
+
+`ConsoleFormatter` and `FileFormatter` override the formatter for their respective outputs. An output without an override continues to use `Formatter`. The built-in `TextFormatter` has a `Color` option that adds ANSI colors to level names: cyan for DEBUG, green for INFO, yellow for WARN, and red for ERROR.
+
+```go
+logger, err := logwriter.New(logwriter.Config{
+    // Formatter may be omitted; it defaults to a shared, colorless TextFormatter.
+    Formatter:        logwriter.TextFormatter{},
+    ConsoleFormatter: logwriter.TextFormatter{Color: true},
+    Console:          true,
+    File:             true,
+    Directory:        "logs",
+})
+```
+
+Here, the file has no `FileFormatter`, so it uses the plain `Formatter`, while the console uses the colored formatter. A custom `FileFormatter` can also give the file an entirely different format, such as JSON.
+
+When neither output-specific formatter is set, the shared formatter is called once per entry and the same bytes go to every output. Setting either override makes the outputs format independently, and an error returned by one output's formatter does not block the other. File rotation uses the byte length produced by the file's own formatter. `Color` is explicit and does not perform terminal detection; disable it as needed when redirecting console output.
 
 ## File naming
 
@@ -217,7 +237,9 @@ The background consumer recovers panics raised while processing an entry (for ex
 | Field | Default | Description |
 |---|---|---|
 | `Level` | `DebugLevel` | Minimum output level |
-| `Formatter` | `TextFormatter{}` | Entry formatter |
+| `Formatter` | `TextFormatter{}` | Shared formatter when an output-specific formatter is not set |
+| `ConsoleFormatter` | `nil` | Console formatter; falls back to `Formatter` when `nil` |
+| `FileFormatter` | `nil` | File formatter; falls back to `Formatter` when `nil` |
 | `Console` | `false` | Enable console output |
 | `ConsoleWriter` | `os.Stdout` | Console destination; may be another `io.Writer` |
 | `File` | `false` | Enable file output |

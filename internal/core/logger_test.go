@@ -359,6 +359,117 @@ func TestConsoleFailureDoesNotSkipFile(t *testing.T) {
 	}
 }
 
+func TestSharedFormatterRunsOnceForBothOutputs(t *testing.T) {
+	directory := t.TempDir()
+	var console bytes.Buffer
+	formatCalls := 0
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &console,
+		File:          true,
+		Directory:     directory,
+		Formatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			formatCalls++
+			return []byte(entry.Message + "\n"), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("shared")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if formatCalls != 1 {
+		t.Fatalf("Formatter called %d times, want 1", formatCalls)
+	}
+	if want := "shared\n"; console.String() != want {
+		t.Fatalf("console output = %q, want %q", console.String(), want)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "shared\n"; string(data) != want {
+		t.Fatalf("file output = %q, want %q", data, want)
+	}
+}
+
+func TestOutputSpecificFormatters(t *testing.T) {
+	directory := t.TempDir()
+	var console bytes.Buffer
+	sharedCalls := 0
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &console,
+		File:          true,
+		Directory:     directory,
+		Formatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			sharedCalls++
+			return []byte("shared " + entry.Message + "\n"), nil
+		}),
+		ConsoleFormatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			return []byte("console " + entry.Message + "\n"), nil
+		}),
+		FileFormatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			return []byte("file " + entry.Message + "\n"), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("entry")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if sharedCalls != 0 {
+		t.Fatalf("shared Formatter called %d times, want 0", sharedCalls)
+	}
+	if want := "console entry\n"; console.String() != want {
+		t.Fatalf("console output = %q, want %q", console.String(), want)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "file entry\n"; string(data) != want {
+		t.Fatalf("file output = %q, want %q", data, want)
+	}
+}
+
+func TestConsoleFormatterErrorDoesNotSkipFile(t *testing.T) {
+	formatErr := errors.New("console format failed")
+	directory := t.TempDir()
+	var console bytes.Buffer
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &console,
+		File:          true,
+		Directory:     directory,
+		Formatter:     messageFormatter(),
+		ConsoleFormatter: formatter.FormatterFunc(func(record.Entry) ([]byte, error) {
+			return nil, formatErr
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("persisted")
+	if err := logger.Close(); !errors.Is(err, formatErr) {
+		t.Fatalf("Close() error = %v, want console format error", err)
+	}
+	if console.Len() != 0 {
+		t.Fatalf("console output = %q, want empty", console.String())
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "persisted\n"; string(data) != want {
+		t.Fatalf("file output = %q, want %q", data, want)
+	}
+}
+
 func TestCallerIsCapturedAtLoggingCall(t *testing.T) {
 	var caller record.Caller
 	logger, err := New(Config{

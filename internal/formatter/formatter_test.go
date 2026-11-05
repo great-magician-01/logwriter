@@ -68,6 +68,32 @@ func TestTextFormatterCustomTimeLayout(t *testing.T) {
 	}
 }
 
+func TestTextFormatterColor(t *testing.T) {
+	tests := []struct {
+		name  string
+		level record.Level
+		color string
+	}{
+		{name: "debug", level: record.DebugLevel, color: "\x1b[36m"},
+		{name: "info", level: record.InfoLevel, color: "\x1b[32m"},
+		{name: "warn", level: record.WarnLevel, color: "\x1b[33m"},
+		{name: "error", level: record.ErrorLevel, color: "\x1b[31m"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entry := record.Entry{Level: test.level, Message: "colored"}
+			data, err := (TextFormatter{Color: true}).Format(entry)
+			if err != nil {
+				t.Fatalf("Format() error = %v", err)
+			}
+			want := "0001-01-01 00:00:00.000 [" + test.color + test.level.String() + "\x1b[0m] colored\n"
+			if string(data) != want {
+				t.Fatalf("Format() = %q, want %q", data, want)
+			}
+		})
+	}
+}
+
 func TestFormatterFunc(t *testing.T) {
 	formatter := FormatterFunc(func(entry record.Entry) ([]byte, error) {
 		return []byte(entry.Message), nil

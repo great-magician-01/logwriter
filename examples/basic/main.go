@@ -8,13 +8,14 @@ import (
 
 func main() {
 	logger, err := logwriter.New(logwriter.Config{
-		Level:       logwriter.InfoLevel,
-		Console:     true,
-		File:        true,
-		Directory:   "logs",
-		RotateByDay: true,
-		MaxSize:     200 * 1024 * 1024,
-		QueueSize:   1024,
+		Level:            logwriter.InfoLevel,
+		Console:          true,
+		ConsoleFormatter: logwriter.TextFormatter{Color: true},
+		File:             true,
+		Directory:        "logs",
+		RotateByDay:      true,
+		MaxSize:          200 * 1024 * 1024,
+		QueueSize:        1024,
 		OnError: func(err error) {
 			log.Printf("logwriter background error: %v", err)
 		},

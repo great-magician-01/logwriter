@@ -9,8 +9,8 @@
 
 ## 特性
 
-- 自定义 `Formatter`，内置普通文本格式。
-- 控制台、文件或两者同时输出。
+- 自定义 `Formatter`，内置普通文本格式和可选的 ANSI 级别颜色。
+- 控制台、文件或两者同时输出；两个输出可以使用不同的 Formatter。
 - 按天、按大小，或按天和大小组合切割。
 - 有界队列接收日志，单个后台 goroutine 串行执行格式化、输出和切割。
 - 文件写入不使用互斥锁；文件句柄、大小和序号仅由队列消费者访问。
@@ -50,13 +50,14 @@ import (
 
 func main() {
     logger, err := logwriter.New(logwriter.Config{
-        Level:       logwriter.InfoLevel,
-        Console:     true,
-        File:        true,
-        Directory:   "logs",
-        RotateByDay: true,
-        MaxSize:     200 * 1024 * 1024,
-        QueueSize:   1024,
+        Level:            logwriter.InfoLevel,
+        Console:          true,
+        ConsoleFormatter: logwriter.TextFormatter{Color: true},
+        File:             true,
+        Directory:        "logs",
+        RotateByDay:      true,
+        MaxSize:          200 * 1024 * 1024,
+        QueueSize:        1024,
         OnError: func(err error) {
             log.Printf("logger error: %v", err)
         },
@@ -79,7 +80,7 @@ func main() {
 }
 ```
 
-默认文本输出：
+文件中的默认文本输出（控制台仅级别名带 ANSI 颜色，文件不包含颜色转义符）：
 
 ```text
 2026-11-04 15:30:20.123 [INFO] user logged in user_id=10086
@@ -91,7 +92,7 @@ func main() {
 
 仓库包含可以直接运行的完整示例：
 
-- [examples/basic/main.go](examples/basic/main.go)：控制台与文件双输出、按天和大小切割。
+- [examples/basic/main.go](examples/basic/main.go)：控制台有色、文件无色的双输出，以及按天和大小切割。
 - [examples/custom_formatter/main.go](examples/custom_formatter/main.go)：自定义 JSON Formatter、结构化字段和调用位置。
 
 在仓库根目录运行：
@@ -135,6 +136,25 @@ logger, err := logwriter.New(logwriter.Config{
 ```
 
 Formatter 在后台消费者中串行调用，不要求其实现支持并发。需要换行时，由 Formatter 自行添加 `\n`；文件大小按照格式化后的实际字节数计算。
+
+### 控制台有色、文件无色
+
+`ConsoleFormatter` 和 `FileFormatter` 分别覆盖控制台与文件使用的 Formatter；未设置的输出继续使用 `Formatter`。内置 `TextFormatter` 的 `Color` 开关会为级别名添加 ANSI 颜色：DEBUG 为青色、INFO 为绿色、WARN 为黄色、ERROR 为红色。
+
+```go
+logger, err := logwriter.New(logwriter.Config{
+    // Formatter 可省略，默认是两个输出共用的无色 TextFormatter。
+    Formatter:        logwriter.TextFormatter{},
+    ConsoleFormatter: logwriter.TextFormatter{Color: true},
+    Console:          true,
+    File:             true,
+    Directory:        "logs",
+})
+```
+
+上例中，文件未设置 `FileFormatter`，因此使用无色的 `Formatter`；控制台使用带色 Formatter。也可以设置自定义的 `FileFormatter`，让文件使用 JSON 等完全不同的格式。
+
+两个输出级 Formatter 都未设置时，共享 Formatter 每条日志只调用一次，同一份字节写入所有输出。设置任一输出级 Formatter 后，各输出独立格式化，一路 Formatter 返回错误不会阻断另一路；文件切割按照文件自身格式化后的字节数计算。`Color` 是显式开关，不会自动探测终端，重定向控制台输出时应按需关闭。
 
 ## 文件命名规则
 
@@ -217,7 +237,9 @@ logs/20261105/20261105_1.log
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `Level` | `DebugLevel` | 最低输出级别 |
-| `Formatter` | `TextFormatter{}` | 日志格式化器 |
+| `Formatter` | `TextFormatter{}` | 输出级 Formatter 未设置时共用的日志格式化器 |
+| `ConsoleFormatter` | `nil` | 控制台专用 Formatter，`nil` 时使用 `Formatter` |
+| `FileFormatter` | `nil` | 文件专用 Formatter，`nil` 时使用 `Formatter` |
 | `Console` | `false` | 是否输出控制台 |
 | `ConsoleWriter` | `os.Stdout` | 控制台目标，可替换为其他 `io.Writer` |
 | `File` | `false` | 是否输出文件 |
