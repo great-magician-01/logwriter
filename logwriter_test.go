@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/great-magician-01/logwriter"
 )
@@ -83,6 +84,73 @@ func TestConsoleColorWithPlainFile(t *testing.T) {
 	wantConsole := strings.Replace(string(data), "[INFO]", "[\x1b[32mINFO\x1b[0m]", 1)
 	if console.String() != wantConsole {
 		t.Fatalf("console output = %q, want %q", console.String(), wantConsole)
+	}
+}
+
+func TestFileOnlyWritesFileNotConsole(t *testing.T) {
+	directory := t.TempDir()
+	var console bytes.Buffer
+	logger, err := logwriter.New(logwriter.Config{
+		Console:       true,
+		ConsoleWriter: &console,
+		File:          true,
+		Directory:     directory,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := logger.Info("on console"); err != nil {
+		t.Fatalf("Info() error = %v", err)
+	}
+	if err := logger.Info("in file only", logwriter.FileOnly()); err != nil {
+		t.Fatalf("Info() error = %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if console.Len() == 0 || strings.Count(console.String(), "\n") != 1 || !strings.Contains(console.String(), "on console") {
+		t.Fatalf("console output = %q, want only the \"on console\" entry", console.String())
+	}
+	if strings.Contains(console.String(), "in file only") {
+		t.Fatalf("console output = %q, want no file-only entry", console.String())
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "in file only\n") {
+		t.Fatalf("file output = %q, want the file-only entry", data)
+	}
+	if strings.Contains(string(data), "logwriter.file_only") {
+		t.Fatalf("file output = %q, want the marker field stripped", data)
+	}
+}
+
+func TestDayDirectoryKeepsPlainFileName(t *testing.T) {
+	directory := t.TempDir()
+	day := time.Now().Format("2006-01-02")
+	logger, err := logwriter.New(logwriter.Config{
+		File:           true,
+		Directory:      directory,
+		DirectoryByDay: true,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if err := logger.Info("plain file name in day directory"); err != nil {
+		t.Fatalf("Info() error = %v", err)
+	}
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(directory, day, "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "plain file name in day directory") {
+		t.Fatalf("file output = %q, want the entry", data)
 	}
 }
 

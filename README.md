@@ -11,7 +11,8 @@
 
 - 自定义 `Formatter`，内置普通文本格式和可选的 ANSI 级别颜色。
 - 控制台、文件或两者同时输出；两个输出可以使用不同的 Formatter。
-- 按天、按大小，或按天和大小组合切割。
+- 按输出逐条过滤日志：`FileOnly` 标记的日志只写入文件、不进控制台。
+- 按天、按大小，或按天和大小组合切割；也可按天分目录并保留原文件名。
 - 有界队列接收日志，单个后台 goroutine 串行执行格式化、输出和切割。
 - 文件写入不使用互斥锁；文件句柄、大小和序号仅由队列消费者访问。
 - 支持日志级别、结构化字段和调用位置。
@@ -154,7 +155,31 @@ logger, err := logwriter.New(logwriter.Config{
 
 上例中，文件未设置 `FileFormatter`，因此使用无色的 `Formatter`；控制台使用带色 Formatter。也可以设置自定义的 `FileFormatter`，让文件使用 JSON 等完全不同的格式。
 
-两个输出级 Formatter 都未设置时，共享 Formatter 每条日志只调用一次，同一份字节写入所有输出。设置任一输出级 Formatter 后，各输出独立格式化，一路 Formatter 返回错误不会阻断另一路；文件切割按照文件自身格式化后的字节数计算。`Color` 是显式开关，不会自动探测终端，重定向控制台输出时应按需关闭。
+两个输出级 Formatter 都未设置时，共享 Formatter 每条日志只调用一次，同一份字节写入所有输出（被过滤器或 `FileOnly` 排除的输出除外）。设置任一输出级 Formatter 后，各输出独立格式化，一路 Formatter 返回错误不会阻断另一路；文件切割按照文件自身格式化后的字节数计算。`Color` 是显式开关，不会自动探测终端，重定向控制台输出时应按需关闭。
+
+## 按输出过滤单条日志
+
+`ConsoleFilter` 和 `FileFilter` 逐条决定一条日志是否进入对应输出，类型为 `func(logwriter.Entry) bool`，返回 `true` 表示写入。过滤器返回 `false` 时，该输出跳过这条日志的格式化和写入；两个过滤器都为 `nil` 时接受全部日志。例如过滤掉 health check 刷屏：
+
+```go
+logger, err := logwriter.New(logwriter.Config{
+    Console:   true,
+    File:      true,
+    Directory: "logs",
+    ConsoleFilter: func(entry logwriter.Entry) bool {
+        return entry.Message != "health check"
+    },
+})
+```
+
+`FileOnly()` 返回一个标记字段：把它作为字段传入任意日志方法，这条日志就只写入文件、跳过控制台，适合记录 token、payload 等不适合在终端展示的内容。
+
+```go
+_ = logger.Info("service started")
+_ = logger.Info("token refreshed", logwriter.FileOnly())
+```
+
+标记字段在格式化前会被移除，不会出现在输出里；自定义 Formatter 可以通过 `Entry.FileOnly` 判断标记。只启用控制台时，`FileOnly` 日志会被直接丢弃。过滤器在后台消费者中串行调用，不要求并发安全，其 panic 与 Formatter 的 panic 一样被恢复并转换为后台错误。
 
 ## 文件命名规则
 
@@ -209,6 +234,19 @@ logs/20261104/20261104_2.log
 logs/20261105/20261105_1.log
 ```
 
+### 按天分目录（保留原文件名）
+
+```go
+Config{File: true, Directory: "logs", DirectoryByDay: true}
+```
+
+```text
+logs/2026-11-04/app.log
+logs/2026-11-05/app.log
+```
+
+目录名为 `2006-01-02` 格式的本地日期，文件名保持 `FilePrefix` 原名；与 `MaxSize` 组合时加上相同的序号后缀，例如 `logs/2026-11-04/app_1.log`。`DirectoryByDay` 与 `RotateByDay` 互斥，同时设置会在 `New()` 时返回错误。
+
 切割行为：
 
 - 写入前检查大小；当前文件大小加本条日志超过 `MaxSize` 时，先切换到新文件。
@@ -216,6 +254,7 @@ logs/20261105/20261105_1.log
 - 跨天在实际处理下一条日志时生效，不在零点创建空文件。
 - 单条日志超过 `MaxSize` 时不拆分该条日志，允许其单独超过限制。
 - 重启后追加到当天最新的未满文件；最新文件已满时创建下一个序号。
+- `DirectoryByDay` 的跨天切换、序号和重启追加行为与 `RotateByDay` 一致。
 - `MaxSize` 单位为字节，示例中的 `200 * 1024 * 1024` 表示 200 MiB。
 
 ## 队列与并发
@@ -240,12 +279,15 @@ logs/20261105/20261105_1.log
 | `Formatter` | `TextFormatter{}` | 输出级 Formatter 未设置时共用的日志格式化器 |
 | `ConsoleFormatter` | `nil` | 控制台专用 Formatter，`nil` 时使用 `Formatter` |
 | `FileFormatter` | `nil` | 文件专用 Formatter，`nil` 时使用 `Formatter` |
+| `ConsoleFilter` | `nil` | 控制台过滤器，返回 `false` 跳过该条日志的控制台输出；`nil` 接受全部 |
+| `FileFilter` | `nil` | 文件过滤器，返回 `false` 跳过该条日志的文件输出；`nil` 接受全部 |
 | `Console` | `false` | 是否输出控制台 |
 | `ConsoleWriter` | `os.Stdout` | 控制台目标，可替换为其他 `io.Writer` |
 | `File` | `false` | 是否输出文件 |
 | `Directory` | `logs` | 日志根目录 |
-| `FilePrefix` | `app` | 非按天模式的基础文件名，不能包含路径 |
-| `RotateByDay` | `false` | 是否按本地日期创建目录并切割 |
+| `FilePrefix` | `app` | 基础文件名（`RotateByDay` 模式下文件名使用日期），不能包含路径 |
+| `RotateByDay` | `false` | 是否按本地日期创建目录并以日期命名、切割文件 |
+| `DirectoryByDay` | `false` | 是否按本地日期（`2006-01-02`）分目录并保留 `FilePrefix` 原文件名；与 `RotateByDay` 互斥 |
 | `MaxSize` | `0` | 单文件最大字节数，`0` 表示不按大小切割 |
 | `QueueSize` | `1024` | 队列容量，必须大于等于 `0` |
 | `Caller` | `false` | 是否采集调用文件和行号 |

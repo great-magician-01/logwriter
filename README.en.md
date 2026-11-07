@@ -11,7 +11,8 @@ An asynchronous Go logging library using only the standard library. It supports 
 
 - Custom `Formatter` support with a built-in plain-text formatter and optional ANSI level colors.
 - Console output, file output, or both, with independent formatters for each output.
-- Rotation by day, size, or both.
+- Per-output entry filtering: entries marked with `FileOnly` go to files only and skip the console.
+- Rotation by day, size, or both, plus an optional day-directory layout that keeps the original file name.
 - A bounded queue and one background goroutine that serializes formatting, output, and rotation.
 - No mutex around file writes; only the queue consumer accesses file handles, sizes, and indexes.
 - Log levels, structured fields, and caller information.
@@ -154,7 +155,31 @@ logger, err := logwriter.New(logwriter.Config{
 
 Here, the file has no `FileFormatter`, so it uses the plain `Formatter`, while the console uses the colored formatter. A custom `FileFormatter` can also give the file an entirely different format, such as JSON.
 
-When neither output-specific formatter is set, the shared formatter is called once per entry and the same bytes go to every output. Setting either override makes the outputs format independently, and an error returned by one output's formatter does not block the other. File rotation uses the byte length produced by the file's own formatter. `Color` is explicit and does not perform terminal detection; disable it as needed when redirecting console output.
+When neither output-specific formatter is set, the shared formatter is called once per entry and the same bytes go to every output (except outputs excluded by a filter or `FileOnly`). Setting either override makes the outputs format independently, and an error returned by one output's formatter does not block the other. File rotation uses the byte length produced by the file's own formatter. `Color` is explicit and does not perform terminal detection; disable it as needed when redirecting console output.
+
+## Per-output entry filtering
+
+`ConsoleFilter` and `FileFilter` decide entry by entry whether an entry reaches the corresponding output. Their type is `func(logwriter.Entry) bool`; returning `true` writes the entry. When a filter returns `false`, that output skips the entry's formatting and write entirely. `nil` filters accept every entry. For example, to stop health checks from flooding the console:
+
+```go
+logger, err := logwriter.New(logwriter.Config{
+    Console:   true,
+    File:      true,
+    Directory: "logs",
+    ConsoleFilter: func(entry logwriter.Entry) bool {
+        return entry.Message != "health check"
+    },
+})
+```
+
+`FileOnly()` returns a marker field: pass it among the fields of any logging call and that entry is written to files only and skipped by the console. Use it for content that should not appear in a terminal, such as tokens or payloads.
+
+```go
+_ = logger.Info("service started")
+_ = logger.Info("token refreshed", logwriter.FileOnly())
+```
+
+The marker is removed before formatting and never appears in the output; custom formatters can inspect `Entry.FileOnly` instead. When only the console is enabled, `FileOnly` entries are dropped. Filters run serially in the background consumer, do not need to be concurrency-safe, and a panicking filter is recovered and reported as a background error, just like a formatter panic.
 
 ## File naming
 
@@ -209,6 +234,19 @@ logs/20261104/20261104_2.log
 logs/20261105/20261105_1.log
 ```
 
+### Day directory (original file name kept)
+
+```go
+Config{File: true, Directory: "logs", DirectoryByDay: true}
+```
+
+```text
+logs/2026-11-04/app.log
+logs/2026-11-05/app.log
+```
+
+The directory is the local date in `2006-01-02` form and the file name keeps `FilePrefix` as-is; combined with `MaxSize`, the same index suffix is appended, such as `logs/2026-11-04/app_1.log`. `DirectoryByDay` and `RotateByDay` are mutually exclusive; setting both makes `New()` return an error.
+
 Rotation behavior:
 
 - Size is checked before writing. If the current size plus the next entry exceeds `MaxSize`, the writer rotates first.
@@ -216,6 +254,7 @@ Rotation behavior:
 - Day rollover happens when the next entry is processed; no empty file is created at midnight.
 - An entry larger than `MaxSize` is kept intact and may exceed the limit in its own file.
 - After a restart, the writer appends to the latest non-full file or creates the next index when that file is full.
+- `DirectoryByDay` rollover, indexing, and restart-append behavior match `RotateByDay`.
 - `MaxSize` is measured in bytes; `200 * 1024 * 1024` means 200 MiB.
 
 ## Queue and concurrency
@@ -240,12 +279,15 @@ The background consumer recovers panics raised while processing an entry (for ex
 | `Formatter` | `TextFormatter{}` | Shared formatter when an output-specific formatter is not set |
 | `ConsoleFormatter` | `nil` | Console formatter; falls back to `Formatter` when `nil` |
 | `FileFormatter` | `nil` | File formatter; falls back to `Formatter` when `nil` |
+| `ConsoleFilter` | `nil` | Console filter; returning `false` skips the entry's console output, `nil` accepts all |
+| `FileFilter` | `nil` | File filter; returning `false` skips the entry's file output, `nil` accepts all |
 | `Console` | `false` | Enable console output |
 | `ConsoleWriter` | `os.Stdout` | Console destination; may be another `io.Writer` |
 | `File` | `false` | Enable file output |
 | `Directory` | `logs` | Log root directory |
-| `FilePrefix` | `app` | Base file name for non-daily mode; paths are rejected |
-| `RotateByDay` | `false` | Create local-date directories and rotate daily |
+| `FilePrefix` | `app` | Base file name (date-named under `RotateByDay`); paths are rejected |
+| `RotateByDay` | `false` | Create local-date directories and name files after the same date |
+| `DirectoryByDay` | `false` | Group files in local-date (`2006-01-02`) directories keeping the `FilePrefix` name; mutually exclusive with `RotateByDay` |
 | `MaxSize` | `0` | Maximum file size in bytes; `0` disables size rotation |
 | `QueueSize` | `1024` | Queue capacity; must be non-negative |
 | `Caller` | `false` | Capture the calling file and line |

@@ -40,6 +40,16 @@ const (
 
 var ErrClosed = core.ErrClosed
 
+// FileOnly returns a Field that marks an entry as file-only: enabled console
+// outputs skip the entry and file outputs write it. The marker is removed
+// from the entry's fields before formatting; custom formatters can inspect
+// Entry.FileOnly instead.
+//
+//	logger.Info("token refreshed", logwriter.FileOnly())
+func FileOnly() Field {
+	return record.FileOnlyField
+}
+
 // New creates a Logger and starts its single background consumer.
 func New(config Config) (*Logger, error) {
 	return core.New(config)

@@ -10,15 +10,32 @@ import (
 	"time"
 )
 
-const dayLayout = "20060102"
+const (
+	dayNameLayout = "20060102"
+	dayDirLayout  = "2006-01-02"
+)
+
+// Mode selects where the local date appears in the file layout.
+type Mode uint8
+
+const (
+	// ModeFlat writes every file directly into the configured directory.
+	ModeFlat Mode = iota
+	// ModeDayName groups files in a local-date directory and names them
+	// after the same compact date: directory/20060102/20060102.log.
+	ModeDayName
+	// ModeDayDir groups files in a local-date directory and keeps the plain
+	// file name: directory/2006-01-02/prefix.log.
+	ModeDayDir
+)
 
 // File writes log bytes to rotating files. It is not safe for concurrent use;
 // the core package restricts it to the single queue consumer.
 type File struct {
-	directory   string
-	prefix      string
-	rotateByDay bool
-	maxSize     int64
+	directory string
+	prefix    string
+	mode      Mode
+	maxSize   int64
 
 	file  *os.File
 	day   string
@@ -27,12 +44,12 @@ type File struct {
 }
 
 // NewFile creates a lazily opened rotating file writer.
-func NewFile(directory, prefix string, rotateByDay bool, maxSize int64) *File {
+func NewFile(directory, prefix string, mode Mode, maxSize int64) *File {
 	return &File{
-		directory:   directory,
-		prefix:      prefix,
-		rotateByDay: rotateByDay,
-		maxSize:     maxSize,
+		directory: directory,
+		prefix:    prefix,
+		mode:      mode,
+		maxSize:   maxSize,
 	}
 }
 
@@ -42,13 +59,13 @@ func (w *File) Write(t time.Time, p []byte) error {
 		return nil
 	}
 
-	day := t.Format(dayLayout)
+	day := w.dayString(t)
 	switch {
 	case w.file == nil:
 		if err := w.openLatest(day); err != nil {
 			return err
 		}
-	case w.rotateByDay && day != w.day:
+	case w.mode != ModeFlat && day != w.day:
 		if err := w.reopenLatest(day); err != nil {
 			return err
 		}
@@ -90,10 +107,7 @@ func (w *File) reopenLatest(day string) error {
 }
 
 func (w *File) openLatest(day string) error {
-	directory := w.directory
-	if w.rotateByDay {
-		directory = filepath.Join(directory, day)
-	}
+	directory := w.directoryFor(day)
 	if err := os.MkdirAll(directory, 0o755); err != nil {
 		return fmt.Errorf("create log directory %q: %w", directory, err)
 	}
@@ -131,10 +145,7 @@ func (w *File) openNext() error {
 		return fmt.Errorf("log file index overflow for %q", w.prefix)
 	}
 
-	directory := w.directory
-	if w.rotateByDay {
-		directory = filepath.Join(directory, w.day)
-	}
+	directory := w.directoryFor(w.day)
 	index := w.index + 1
 	if err := w.open(directory, w.fileName(w.day, index)); err != nil {
 		return err
@@ -165,11 +176,7 @@ func (w *File) latestFile(directory, day string) (index int, size int64, err err
 		return 0, 0, fmt.Errorf("read log directory %q: %w", directory, err)
 	}
 
-	base := w.prefix
-	if w.rotateByDay {
-		base = day
-	}
-	prefix := base + "_"
+	prefix := w.baseName(day) + "_"
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -197,12 +204,35 @@ func (w *File) latestFile(directory, day string) (index int, size int64, err err
 }
 
 func (w *File) fileName(day string, index int) string {
-	name := w.prefix
-	if w.rotateByDay {
-		name = day
-	}
+	name := w.baseName(day)
 	if w.maxSize > 0 {
 		name += "_" + strconv.Itoa(index)
 	}
 	return name + ".log"
+}
+
+// dayString formats the local date used by the layout, or "" for ModeFlat.
+func (w *File) dayString(t time.Time) string {
+	switch w.mode {
+	case ModeDayName:
+		return t.Format(dayNameLayout)
+	case ModeDayDir:
+		return t.Format(dayDirLayout)
+	default:
+		return ""
+	}
+}
+
+func (w *File) directoryFor(day string) string {
+	if w.mode != ModeFlat {
+		return filepath.Join(w.directory, day)
+	}
+	return w.directory
+}
+
+func (w *File) baseName(day string) string {
+	if w.mode == ModeDayName {
+		return day
+	}
+	return w.prefix
 }

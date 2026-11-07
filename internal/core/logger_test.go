@@ -470,6 +470,167 @@ func TestConsoleFormatterErrorDoesNotSkipFile(t *testing.T) {
 	}
 }
 
+func TestFileOnlySkipsConsoleAndStripsMarker(t *testing.T) {
+	directory := t.TempDir()
+	var console bytes.Buffer
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &console,
+		File:          true,
+		Directory:     directory,
+		Formatter:     messageFormatter(),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("on console")
+	_ = logger.Info("in file only", record.FileOnlyField)
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if want := "on console\n"; console.String() != want {
+		t.Fatalf("console output = %q, want %q", console.String(), want)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "in file only\n") {
+		t.Fatalf("file output = %q, want the file-only entry", data)
+	}
+	if strings.Contains(string(data), record.FileOnlyField.Key) {
+		t.Fatalf("file output = %q, want the marker field stripped", data)
+	}
+}
+
+func TestFileOnlyVisibleToFormatter(t *testing.T) {
+	var output bytes.Buffer
+	sawFileOnly := false
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &output,
+		File:          true,
+		Directory:     t.TempDir(),
+		Formatter: formatter.FormatterFunc(func(entry record.Entry) ([]byte, error) {
+			if entry.Message == "marked" {
+				sawFileOnly = entry.FileOnly && len(entry.Fields) == 0
+			} else if entry.FileOnly || len(entry.Fields) != 1 {
+				t.Errorf("entry %q: FileOnly = %v, fields = %d, want false and 1",
+					entry.Message, entry.FileOnly, len(entry.Fields))
+			}
+			return []byte(entry.Message + "\n"), nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("plain", record.Field{Key: "k", Value: "v"})
+	_ = logger.Info("marked", record.FileOnlyField)
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !sawFileOnly {
+		t.Fatal("formatter did not observe FileOnly with the marker stripped")
+	}
+}
+
+func TestPerOutputFilters(t *testing.T) {
+	directory := t.TempDir()
+	var console bytes.Buffer
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &console,
+		File:          true,
+		Directory:     directory,
+		Formatter:     messageFormatter(),
+		ConsoleFilter: func(entry record.Entry) bool { return entry.Message != "console-hidden" },
+		FileFilter:    func(entry record.Entry) bool { return entry.Message != "file-hidden" },
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("both")
+	_ = logger.Info("console-hidden")
+	_ = logger.Info("file-hidden")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if want := "both\nfile-hidden\n"; console.String() != want {
+		t.Fatalf("console output = %q, want %q", console.String(), want)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "both\nconsole-hidden\n"; string(data) != want {
+		t.Fatalf("file output = %q, want %q", data, want)
+	}
+}
+
+func TestConsoleFilterIsNotConsultedForFileOnly(t *testing.T) {
+	directory := t.TempDir()
+	var console bytes.Buffer
+	logger, err := New(Config{
+		Console:       true,
+		ConsoleWriter: &console,
+		File:          true,
+		Directory:     directory,
+		Formatter:     messageFormatter(),
+		ConsoleFilter: func(record.Entry) bool {
+			t.Error("ConsoleFilter called for a FileOnly entry")
+			return true
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_ = logger.Info("marked", record.FileOnlyField)
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if console.Len() != 0 {
+		t.Fatalf("console output = %q, want empty", console.String())
+	}
+}
+
+func TestDayDirectoryLayout(t *testing.T) {
+	directory := t.TempDir()
+	logger, err := New(Config{
+		File:           true,
+		Directory:      directory,
+		DirectoryByDay: true,
+		Formatter:      messageFormatter(),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	dayOne := time.Date(2026, 11, 4, 12, 0, 0, 0, time.Local)
+	logger.now = func() time.Time { return dayOne }
+	_ = logger.Info("day one")
+	logger.now = func() time.Time { return dayOne.Add(24 * time.Hour) }
+	_ = logger.Info("day two")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(directory, "2026-11-04", "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "day one\n"; string(data) != want {
+		t.Fatalf("day one output = %q, want %q", data, want)
+	}
+	data, err = os.ReadFile(filepath.Join(directory, "2026-11-05", "app.log"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if want := "day two\n"; string(data) != want {
+		t.Fatalf("day two output = %q, want %q", data, want)
+	}
+}
+
 func TestCallerIsCapturedAtLoggingCall(t *testing.T) {
 	var caller record.Caller
 	logger, err := New(Config{
@@ -503,6 +664,7 @@ func TestConfigValidation(t *testing.T) {
 		{name: "negative queue", config: Config{Console: true, QueueSize: -1}},
 		{name: "negative size", config: Config{File: true, MaxSize: -1}},
 		{name: "path as prefix", config: Config{File: true, FilePrefix: `dir/app`}},
+		{name: "both day layouts", config: Config{Console: true, RotateByDay: true, DirectoryByDay: true}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
