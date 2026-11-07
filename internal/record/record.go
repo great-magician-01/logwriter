@@ -55,4 +55,50 @@ type Entry struct {
 	Message string
 	Fields  []Field
 	Caller  Caller
+	// FileOnly reports whether the entry should be written to file outputs
+	// only. Console outputs skip it. It is set by the FileOnly field marker,
+	// which is removed from Fields before formatting.
+	FileOnly bool
+}
+
+// fileOnlyMark is the sentinel Value of FileOnlyField. The unexported type
+// prevents ordinary fields with a matching key from being mistaken for the
+// marker.
+type fileOnlyMark struct{}
+
+const fileOnlyKey = "logwriter.file_only"
+
+// FileOnlyField marks an entry as file-only when passed among the fields of a
+// logging call. The logger strips it from the entry and skips console outputs
+// for that entry.
+var FileOnlyField = Field{Key: fileOnlyKey, Value: fileOnlyMark{}}
+
+// StripFileOnly removes every FileOnlyField from fields and reports whether
+// at least one was present. The returned slice shares fields when nothing is
+// stripped.
+func StripFileOnly(fields []Field) ([]Field, bool) {
+	stripped := 0
+	for _, field := range fields {
+		if isFileOnly(field) {
+			stripped++
+		}
+	}
+	if stripped == 0 {
+		return fields, false
+	}
+	rest := make([]Field, 0, len(fields)-stripped)
+	for _, field := range fields {
+		if !isFileOnly(field) {
+			rest = append(rest, field)
+		}
+	}
+	return rest, true
+}
+
+func isFileOnly(field Field) bool {
+	if field.Key != fileOnlyKey {
+		return false
+	}
+	_, ok := field.Value.(fileOnlyMark)
+	return ok
 }

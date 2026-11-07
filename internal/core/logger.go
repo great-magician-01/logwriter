@@ -20,7 +20,8 @@ const DefaultQueueSize = 1024
 
 var ErrClosed = errors.New("logwriter: logger is closed")
 
-// Config controls logging, outputs, queuing, and file rotation.
+// Config controls logging, outputs, queuing, per-output entry filtering, and
+// file rotation.
 // ConsoleFormatter and FileFormatter optionally override Formatter for their
 // respective outputs. A nil output-specific formatter falls back to Formatter.
 type Config struct {
@@ -28,16 +29,32 @@ type Config struct {
 	Formatter        formatter.Formatter
 	ConsoleFormatter formatter.Formatter
 	FileFormatter    formatter.Formatter
-	Console          bool
-	ConsoleWriter    io.Writer
-	File             bool
-	Directory        string
-	FilePrefix       string
-	RotateByDay      bool
-	MaxSize          int64
-	QueueSize        int
-	Caller           bool
-	OnError          func(error)
+	// ConsoleFilter optionally rejects entries for the console output. It
+	// receives every accepted entry; returning false skips the console
+	// formatting and write for that entry. nil accepts every entry. FileOnly
+	// entries skip the console without consulting this filter.
+	ConsoleFilter func(record.Entry) bool
+	// FileFilter optionally rejects entries for the file output the same way
+	// ConsoleFilter does for the console. nil accepts every entry.
+	FileFilter func(record.Entry) bool
+
+	Console       bool
+	ConsoleWriter io.Writer
+	File          bool
+	Directory     string
+	FilePrefix    string
+	// RotateByDay groups files in a local-date directory and names them
+	// after the same compact date: directory/20060102/20060102.log.
+	RotateByDay bool
+	// DirectoryByDay keeps the plain FilePrefix file name and groups files
+	// in a local-date directory: directory/2006-01-02/prefix.log. Day
+	// rollover, MaxSize indexing, and restart append behave like RotateByDay.
+	// It cannot be combined with RotateByDay.
+	DirectoryByDay bool
+	MaxSize        int64
+	QueueSize      int
+	Caller         bool
+	OnError        func(error)
 }
 
 // Logger accepts entries concurrently and writes them from one consumer.
@@ -50,6 +67,8 @@ type Logger struct {
 	formatter        formatter.Formatter
 	consoleFormatter formatter.Formatter
 	fileFormatter    formatter.Formatter
+	consoleFilter    func(record.Entry) bool
+	fileFilter       func(record.Entry) bool
 	console          io.Writer
 	file             *logfile.File
 	caller           bool
@@ -72,6 +91,9 @@ func New(config Config) (*Logger, error) {
 	}
 	if config.MaxSize < 0 {
 		return nil, errors.New("logwriter: maximum file size cannot be negative")
+	}
+	if config.RotateByDay && config.DirectoryByDay {
+		return nil, errors.New("logwriter: RotateByDay and DirectoryByDay cannot both be enabled")
 	}
 	if config.Formatter == nil {
 		config.Formatter = formatter.TextFormatter{}
@@ -99,7 +121,14 @@ func New(config Config) (*Logger, error) {
 		if config.FilePrefix == "." || config.FilePrefix == ".." || strings.ContainsAny(config.FilePrefix, `/\\`) {
 			return nil, errors.New("logwriter: file prefix must be a file name, not a path")
 		}
-		file = logfile.NewFile(config.Directory, config.FilePrefix, config.RotateByDay, config.MaxSize)
+		mode := logfile.ModeFlat
+		switch {
+		case config.RotateByDay:
+			mode = logfile.ModeDayName
+		case config.DirectoryByDay:
+			mode = logfile.ModeDayDir
+		}
+		file = logfile.NewFile(config.Directory, config.FilePrefix, mode, config.MaxSize)
 	}
 
 	logger := &Logger{
@@ -109,6 +138,8 @@ func New(config Config) (*Logger, error) {
 		formatter:        config.Formatter,
 		consoleFormatter: config.ConsoleFormatter,
 		fileFormatter:    config.FileFormatter,
+		consoleFilter:    config.ConsoleFilter,
+		fileFilter:       config.FileFilter,
 		console:          console,
 		file:             file,
 		caller:           config.Caller,
@@ -157,6 +188,10 @@ func (l *Logger) log(level record.Level, message string, fields []record.Field, 
 		Level:   level,
 		Message: message,
 		Fields:  append([]record.Field(nil), fields...),
+	}
+	if rest, fileOnly := record.StripFileOnly(entry.Fields); fileOnly {
+		entry.Fields = rest
+		entry.FileOnly = true
 	}
 	if l.caller {
 		if _, file, line, ok := runtime.Caller(callerSkip); ok {
@@ -248,6 +283,13 @@ func (l *Logger) consume(entry record.Entry) {
 }
 
 func (l *Logger) write(entry record.Entry) error {
+	console := l.console != nil && !entry.FileOnly &&
+		(l.consoleFilter == nil || l.consoleFilter(entry))
+	file := l.file != nil && (l.fileFilter == nil || l.fileFilter(entry))
+	if !console && !file {
+		return nil
+	}
+
 	if l.consoleFormatter == nil && l.fileFormatter == nil {
 		data, err := l.formatter.Format(entry)
 		if err != nil {
@@ -256,11 +298,11 @@ func (l *Logger) write(entry record.Entry) error {
 		if len(data) == 0 {
 			return nil
 		}
-		return l.writeShared(entry, data)
+		return l.writeShared(entry, data, console, file)
 	}
 
 	var errs []error
-	if l.console != nil {
+	if console {
 		outputFormatter := l.consoleFormatter
 		if outputFormatter == nil {
 			outputFormatter = l.formatter
@@ -275,7 +317,7 @@ func (l *Logger) write(entry record.Entry) error {
 			}
 		}
 	}
-	if l.file != nil {
+	if file {
 		outputFormatter := l.fileFormatter
 		if outputFormatter == nil {
 			outputFormatter = l.formatter
@@ -293,14 +335,14 @@ func (l *Logger) write(entry record.Entry) error {
 	return errors.Join(errs...)
 }
 
-func (l *Logger) writeShared(entry record.Entry, data []byte) error {
+func (l *Logger) writeShared(entry record.Entry, data []byte, console, file bool) error {
 	var errs []error
-	if l.console != nil {
+	if console {
 		if err := writeAll(l.console, data); err != nil {
 			errs = append(errs, fmt.Errorf("write console: %w", err))
 		}
 	}
-	if l.file != nil {
+	if file {
 		if err := l.file.Write(entry.Time, data); err != nil {
 			errs = append(errs, err)
 		}
