@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/great-magician-01/logwriter/compare/v1.2.0...v1.3.0) (2026-11-07)
+
+
+### Features
+
+* add per-entry output filtering and day-directory layout ([ded724a](https://github.com/great-magician-01/logwriter/commit/ded724a80ab7f962216b550506aca500536dc217))
+* add per-entry output filtering and day-directory layout ([2ab0651](https://github.com/great-magician-01/logwriter/commit/2ab0651cab033f29b1c7b7b80c731db4b2114bf4))
+
 ## [1.2.0](https://github.com/great-magician-01/logwriter/compare/v1.1.0...v1.2.0) (2026-11-05)
 
 
